@@ -1,21 +1,30 @@
 import multiprocessing as mp
 import queue
+import subprocess
+from typing import List
 
 
 class Task:
-    def __init__(task_type: str, url: str):
+    def __init__(self, task_type: str, url: str):
         self.task_type = task_type
         self.url = url
         self.done = False
         self.status = None
 
-    def set_done():
+    def set_done(self):
         self.done = True
 
+
 class DownloadTask(Task):
-    def __init__(self, download_path:str, **kwargs):
+    def __init__(self, download_path: str, command_path: str, **kwargs):
         super(DownloadTask, self).__init__(**kwargs)
         self.download_path = download_path
+        self.command_path = command_path
+    
+    def execute(self):
+        ret = subprocess.run([self.command_path, self.url, self.download_path])
+        return ret
+
 
 class ParseTask(Task):
     def __init__(self, output_path: str, **kwargs):
@@ -62,8 +71,11 @@ def main():
     parse_tasks_assigned = mp.Queue()
     parse_tasks_done = mp.Queue()
 
-    download_tasks = init_download_tasks(input_path)
+    download_tasks = init_download_tasks()
     for t in download_tasks:
         dl_tasks_assigned.put(t)
 
-    pass
+
+def test():
+    t1 = DownloadTask(download_path='/tmp', command_path='yt-dlp', url='')
+    ret = t1.execute()
