@@ -1,4 +1,5 @@
 import multiprocessing as mp
+import queue
 
 
 class Task:
@@ -8,7 +9,7 @@ class Task:
         self.done = False
         self.status = None
 
-    def done():
+    def set_done():
         self.done = True
 
 class DownloadTask(Task):
@@ -23,14 +24,31 @@ class ParseTask(Task):
 
 
 def download_worker(tasks_assigned, tasks_done):
-    while tasks_assigned:
-        # do the task
-        pass
-    tasks_done.put() # mark all done
+    while True:
+        try:
+            task = tasks_assigned.get_nowait()
+        except queue.Empty:
+            break
+        else:
+            # do the task
+
+            task.set_done()
+            tasks_done.put(task)
+    return True        
 
 
 def parse_worker(tasks_assigned, tasks_done):
-    pass
+    while True:
+        try:
+           task = tasks_assigned.get_nowait()
+        except queue.Empty:
+            break
+        else:
+            # do the task
+
+            task.set_done()
+            tasks_done.put(task)
+    return True
 
 
 def init_download_tasks(input_path: str) -> List[Task]:
