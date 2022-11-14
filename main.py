@@ -1,7 +1,17 @@
 import multiprocessing as mp
 import queue
 import subprocess
+import json
+import sys
+import time
 from typing import List
+
+# Fix mp.Queue.qsize() problem on MacOS
+import platform
+if platform.system() == 'Darwin':
+    from FixedQueue import Queue
+else:
+    from multiprocessing.queues import Queue
 
 
 class Task:
@@ -16,15 +26,25 @@ class Task:
 
 
 class DownloadTask(Task):
-    def __init__(self, download_path: str, command_path: str, **kwargs):
+    command = 'yt-dlp'
+
+    def __init__(self, download_path: str, **kwargs):
         super(DownloadTask, self).__init__(**kwargs)
         self.download_path = download_path
-        self.command_path = command_path
+        self.n_trials = 0
     
     def execute(self):
-        ret = subprocess.run([self.command_path, self.url, '--paths', self.download_path, 
+        ret = subprocess.run([DownloadTask.command, self.url, '--paths', self.download_path, 
         '--output', '%(id)s.%(ext)s', '--format', 'mp4', '--write-auto-subs',
         '--quiet'])
+
+        if ret.returncode == 0:
+            self.set_done()
+            self.status = 'success'
+        else:
+            self.status = 'failure'
+        self.n_trials += 1
+
         return ret
 
 
@@ -34,7 +54,7 @@ class ParseTask(Task):
         self.output_path = output_path
 
 
-def download_worker(tasks_assigned, tasks_done):
+def download_worker(tasks_assigned, tasks_done, tasks_fail):
     while True:
         try:
             task = tasks_assigned.get_nowait()
@@ -42,9 +62,12 @@ def download_worker(tasks_assigned, tasks_done):
             break
         else:
             # do the task
+            task.execute()
+            if task.done:
+                tasks_done.put(task)
+            else:
+                tasks_fail.put(task)
 
-            task.set_done()
-            tasks_done.put(task)
     return True
 
 
@@ -56,33 +79,67 @@ def parse_worker(tasks_assigned, tasks_done):
             break
         else:
             # do the task
-
             task.set_done()
             tasks_done.put(task)
     return True
 
 
-def init_download_tasks(input_path: str) -> List[Task]:
-    pass
+def init_download_tasks(play_list_file: str) -> List[Task]:
+    video_urls = []
+    with open(play_list_file, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if len(line) == 0 or line.startswith('#'):
+                continue
+            if line.startswith('{'):
+                json_obj = json.loads(line)
+                if json_obj['duration'] is not None: # duration is null for private videos
+                    video_urls.append(json_obj['url'])
+                    
+    tasks = []
+    for url in video_urls:
+        tasks.append(DownloadTask(download_path='./tmp', url=url, task_type='download'))
+    
+    return tasks
 
 
 def main():
-    dl_tasks_assigned = mp.Queue()
-    dl_tasks_done = mp.Queue()
+    dl_tasks_assigned = Queue()
+    dl_tasks_done = Queue()
+    dl_tasks_fail = Queue()
 
-    parse_tasks_assigned = mp.Queue()
-    parse_tasks_done = mp.Queue()
+    parse_tasks_assigned = Queue()
+    parse_tasks_done = Queue()
 
     download_tasks = init_download_tasks()
     for t in download_tasks:
         dl_tasks_assigned.put(t)
 
 
-def test():
-    t1 = DownloadTask(download_path='./tmp', command_path='yt-dlp', url='https://www.youtube.com/watch?v=Z3l3ST7z7ps', task_type='download')
-    ret = t1.execute()
-    print(ret)
+def test_dl():
+    # t1 = DownloadTask(download_path='./tmp', url='https://www.youtube.com/watch?v=Z3l3ST7z7ps', task_type='download')
+    # ret = t1.execute()
+    # print(ret)
+
+    play_list_file = 'play_lists/Life Academy_Loving on Purpose.md'
+    dl_tasks_assigned = Queue()
+    dl_tasks_done = Queue()
+    dl_tasks_failed = Queue()
+    tasks = init_download_tasks(play_list_file)
+    for t in tasks:
+        dl_tasks_assigned.put(t)
+    
+    p = mp.Process(target = download_worker, args=(dl_tasks_assigned, dl_tasks_done, dl_tasks_failed))
+    p.start()
+
+    while True:
+        time.sleep(1000)
+        sys.stdout.write(f'\r Remaining tasks #: {dl_tasks_assigned.qsize()} | Done: {dl_tasks_done.qsize()} | Failed: {dl_tasks_failed.qsize()}')
+        sys.stdout.flush()
+        if dl_tasks_assigned.empty():
+            break
+    p.join()
 
 
 if __name__ == '__main__':
-    test()
+    test_dl()
