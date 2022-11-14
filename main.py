@@ -22,7 +22,9 @@ class DownloadTask(Task):
         self.command_path = command_path
     
     def execute(self):
-        ret = subprocess.run([self.command_path, self.url, self.download_path])
+        ret = subprocess.run([self.command_path, self.url, '--paths', self.download_path, 
+        '--output', '%(id)s.%(ext)s', '--format', 'mp4', '--write-auto-subs',
+        '--quiet'])
         return ret
 
 
@@ -43,7 +45,7 @@ def download_worker(tasks_assigned, tasks_done):
 
             task.set_done()
             tasks_done.put(task)
-    return True        
+    return True
 
 
 def parse_worker(tasks_assigned, tasks_done):
@@ -77,5 +79,10 @@ def main():
 
 
 def test():
-    t1 = DownloadTask(download_path='/tmp', command_path='yt-dlp', url='')
+    t1 = DownloadTask(download_path='./tmp', command_path='yt-dlp', url='https://www.youtube.com/watch?v=Z3l3ST7z7ps', task_type='download')
     ret = t1.execute()
+    print(ret)
+
+
+if __name__ == '__main__':
+    test()
