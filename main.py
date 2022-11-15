@@ -128,17 +128,34 @@ def test_dl():
     tasks = init_download_tasks(play_list_file)
     for t in tasks:
         dl_tasks_assigned.put(t)
-    
-    p = mp.Process(target = download_worker, args=(dl_tasks_assigned, dl_tasks_done, dl_tasks_failed))
-    p.start()
+    num_tasks_total = len(tasks)
+
+    num_dl_workers = 2
+    download_processes = []
+    for _ in range(num_dl_workers):
+        p = mp.Process(target = download_worker, args=(dl_tasks_assigned, dl_tasks_done, dl_tasks_failed))
+        download_processes.append(p)
+        p.start()
 
     while True:
-        time.sleep(1000)
-        sys.stdout.write(f'\r Remaining tasks #: {dl_tasks_assigned.qsize()} | Done: {dl_tasks_done.qsize()} | Failed: {dl_tasks_failed.qsize()}')
+        time.sleep(1)
+        num_tasks_done = dl_tasks_done.qsize()
+        num_tasks_failed = dl_tasks_failed.qsize()
+        num_tasks_remain = num_tasks_total - num_tasks_done - num_tasks_failed
+        sys.stdout.write(f'\r Remaining tasks #: {num_tasks_remain} | Done: {num_tasks_done} | Failed: {num_tasks_failed}')
         sys.stdout.flush()
-        if dl_tasks_assigned.empty():
+
+        if num_tasks_remain == 0:
+            print('='*12)
+            print('All download tasks done')
             break
-    p.join()
+    
+    for p in download_processes:
+        p.join()
+
+
+def test_parse():
+    pass
 
 
 if __name__ == '__main__':
