@@ -49,9 +49,14 @@ class DownloadTask(Task):
 
 
 class ParseTask(Task):
-    def __init__(self, output_path: str, **kwargs):
+    def __init__(self, output_path: str, sample_interval: int, delete_after_done: bool, **kwargs):
         super(ParseTask, self).__init__(**kwargs)
         self.output_path = output_path
+        self.sample_interval = sample_interval
+        self.delete_after_done = delete_after_done
+    
+    def execute(self):
+        pass
 
 
 def download_worker(tasks_assigned, tasks_done, tasks_fail):
@@ -155,6 +160,7 @@ def test_dl():
 
 
 def test_parse():
+	
     pass
 
 
