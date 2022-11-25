@@ -4,6 +4,9 @@ import subprocess
 import json
 import sys
 import time
+import cv2
+import face_recognition
+import numpy as np
 from typing import List
 
 # Fix mp.Queue.qsize() problem on MacOS
@@ -20,7 +23,6 @@ class Task:
         self.url = url
         self.done = False
         self.status = None
-
     def set_done(self):
         self.done = True
 
@@ -37,26 +39,60 @@ class DownloadTask(Task):
         ret = subprocess.run([DownloadTask.command, self.url, '--paths', self.download_path, 
         '--output', '%(id)s.%(ext)s', '--format', 'mp4', '--write-auto-subs',
         '--quiet'])
-
         if ret.returncode == 0:
             self.set_done()
             self.status = 'success'
         else:
             self.status = 'failure'
         self.n_trials += 1
-
         return ret
 
 
 class ParseTask(Task):
-    def __init__(self, output_path: str, sample_interval: int, delete_after_done: bool, **kwargs):
+    def __init__(self, input_path: str, sample_interval: int, batch_mode: bool, batch_size: int,
+                 delete_after_done: bool, **kwargs):
+        """
+        :param input_path: Path of input video file
+        :param sample_interval: Interval of sampling the input video, measured by number of frames
+        :param delete_after_done: If True, delete the input video after the parsing is successfully done
+        :param kwargs:
+        """
         super(ParseTask, self).__init__(**kwargs)
-        self.output_path = output_path
         self.sample_interval = sample_interval
+        self.batch_mode = batch_mode
+        self.batch_size = batch_size
         self.delete_after_done = delete_after_done
-    
+        self.parse_result = None
     def execute(self):
-        pass
+        try:
+            video_capture = cv2.VideoCapture(self.input_path)
+            total_frame_count = int(video_capture.get(cv2.CAP_PROP_FRAME_COUNT))
+        except Exception:
+            self.status = 'failure'
+            return 1
+        else:
+            if self.batch_mode:
+                # Use CUDA for faster processing
+                # https://github.com/ageitgey/face_recognition/blob/master/examples/find_faces_in_batches.py
+                frames = []
+                current_frame_index = -1
+                frame_indices = []
+                number_of_faces_in_frames = []
+                while video_capture.isOpened():
+                    ret, frame = video_capture.read()
+                    if not ret:
+                        break
+                    current_frame_index += 1
+                    if (current_frame_index + 1) % self.sample_interval == 0:
+                        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        frames.append(frame)
+                        frame_indices.append(current_frame_index)
+                    if len(frames) == self.batch_size \
+                            or current_frame_index == total_frame_count - 1: # Last frame
+                        pass
+                        frames = []
+            else:
+                pass
 
 
 def download_worker(tasks_assigned, tasks_done, tasks_fail):
@@ -72,7 +108,6 @@ def download_worker(tasks_assigned, tasks_done, tasks_fail):
                 tasks_done.put(task)
             else:
                 tasks_fail.put(task)
-
     return True
 
 
