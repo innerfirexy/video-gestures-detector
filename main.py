@@ -3,10 +3,13 @@ import queue
 import subprocess
 import json
 import sys
+import os
 import time
 import cv2
 import face_recognition
 import numpy as np
+import argparse
+import re
 from typing import List
 
 # Fix mp.Queue.qsize() problem on MacOS
@@ -16,6 +19,16 @@ if platform.system() == 'Darwin':
 else:
     from multiprocessing.queues import Queue
 
+# Create argument parser
+def create_parser():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--batch_mode', '-bm', action='store_true')
+    parser.add_argument('--batch_size', '-bs', type=int, default=128)
+    parser.add_argument('--delete_after_done', action='store_true')
+    parser.add_argument('--sample_interval', '-si', type=int, default=24)
+    parser.add_argument('--log_file', type=str)
+    return parser
+
 
 class Task:
     def __init__(self, task_type: str, url: str):
@@ -23,13 +36,13 @@ class Task:
         self.url = url
         self.done = False
         self.status = None
+        self.video_id = re.search(r'(?<=\?v\=).+', url).group(0)
     def set_done(self):
         self.done = True
 
 
 class DownloadTask(Task):
     command = 'yt-dlp'
-
     def __init__(self, download_path: str, args, **kwargs):
         super(DownloadTask, self).__init__(**kwargs)
         self.download_path = download_path
@@ -49,7 +62,10 @@ class DownloadTask(Task):
         return ret
 
     def create_next_task(self):
-        parse_task = ParseTask()
+        input_video = os.path.join(self.download_path, self.video_id + '.mp4')
+        parse_task = ParseTask(self, input_path=input_video, sample_interval=self.args.sample_interval,
+                               batch_mode=self.args.batch_mode, batch_size=self.args.batch_size,
+                               delete_after_done=self.args.delete_after_done, url=self.url)
         return parse_task
 
 
@@ -63,6 +79,7 @@ class ParseTask(Task):
         :param kwargs:
         """
         super(ParseTask, self).__init__(**kwargs)
+        self.input_file = input_path
         self.sample_interval = sample_interval
         self.batch_mode = batch_mode
         self.batch_size = batch_size
@@ -228,6 +245,7 @@ def test_parse():
     while True:
         # dispatch download
         pass
+
 
 if __name__ == '__main__':
     test_dl()
