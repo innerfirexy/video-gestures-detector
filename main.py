@@ -30,11 +30,12 @@ class Task:
 class DownloadTask(Task):
     command = 'yt-dlp'
 
-    def __init__(self, download_path: str, **kwargs):
+    def __init__(self, download_path: str, args, **kwargs):
         super(DownloadTask, self).__init__(**kwargs)
         self.download_path = download_path
         self.n_trials = 0
-    
+        self.args = args
+
     def execute(self):
         ret = subprocess.run([DownloadTask.command, self.url, '--paths', self.download_path, 
         '--output', '%(id)s.%(ext)s', '--format', 'mp4', '--write-auto-subs',
@@ -46,6 +47,10 @@ class DownloadTask(Task):
             self.status = 'failure'
         self.n_trials += 1
         return ret
+
+    def create_next_task(self):
+        parse_task = ParseTask()
+        return parse_task
 
 
 class ParseTask(Task):
@@ -89,13 +94,26 @@ class ParseTask(Task):
                         frame_indices.append(current_frame_index)
                     if len(frames) == self.batch_size \
                             or current_frame_index == total_frame_count - 1: # Last frame
-                        pass
+                        batch_of_face_locations = face_recognition.batch_face_locations(frames, number_of_times_to_upsample=0)
+                        for face_locations in batch_of_face_locations:
+                            num_faces = len(face_locations)
+                            number_of_faces_in_frames.append(num_faces)
                         frames = []
+                self.status = 'success'
+                self.set_done()
+                self.parse_result = (frame_indices, number_of_faces_in_frames)
             else:
+                # Process frames one by one
+                # https://github.com/ageitgey/face_recognition/blob/master/examples/find_faces_in_picture.py
                 pass
 
+            if self.delete_after_done:
+                pass
 
-def download_worker(tasks_assigned, tasks_done, tasks_fail):
+            return 0
+
+
+def task_worker(tasks_assigned, tasks_done, tasks_fail, next_tasks_assigned=None):
     while True:
         try:
             task = tasks_assigned.get_nowait()
@@ -106,21 +124,12 @@ def download_worker(tasks_assigned, tasks_done, tasks_fail):
             task.execute()
             if task.done:
                 tasks_done.put(task)
+                if next_tasks_assigned is not None:
+                    # Create parse task and add it to the queue
+                    next_task = task.create_next_task()
+                    next_tasks_assigned.put(next_task)
             else:
                 tasks_fail.put(task)
-    return True
-
-
-def parse_worker(tasks_assigned, tasks_done):
-    while True:
-        try:
-           task = tasks_assigned.get_nowait()
-        except queue.Empty:
-            break
-        else:
-            # do the task
-            task.set_done()
-            tasks_done.put(task)
     return True
 
 
@@ -173,7 +182,7 @@ def test_dl():
     num_dl_workers = 2
     download_processes = []
     for _ in range(num_dl_workers):
-        p = mp.Process(target = download_worker, args=(dl_tasks_assigned, dl_tasks_done, dl_tasks_failed))
+        p = mp.Process(target = task_worker, args=(dl_tasks_assigned, dl_tasks_done, dl_tasks_failed))
         download_processes.append(p)
         p.start()
 
@@ -195,9 +204,30 @@ def test_dl():
 
 
 def test_parse():
-	
-    pass
+    play_list_file = 'play_lists/Life Academy_Loving on Purpose.md'
+    dl_tasks_assigned = Queue()
+    dl_tasks_done = Queue()
+    dl_tasks_failed = Queue()
+    tasks = init_download_tasks(play_list_file)
+    for t in tasks:
+        dl_tasks_assigned.put(t)
+    num_dl_tasks = len(tasks)
 
+    num_dl_workers = 2
+    download_processes = []
+    for _ in range(num_dl_workers):
+        p = mp.Process(target = task_worker, args=(dl_tasks_assigned, dl_tasks_done, dl_tasks_failed))
+        download_processes.append(p)
+        p.start()
+
+    num_parse_workers = 2
+    parse_processes = []
+    for _ in range(num_parse_workers):
+        pass
+
+    while True:
+        # dispatch download
+        pass
 
 if __name__ == '__main__':
     test_dl()
