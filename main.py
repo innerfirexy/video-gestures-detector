@@ -98,15 +98,16 @@ class ParseTask(Task):
         if os.path.exists(self.input_file):
             os.remove(self.input_file)
 
-    def execute(self):
-        # print(f'parsing {self.input_file}')
+    def execute(self, pid:int=None):
+        # print(f'Worker-{pid} started parsing {self.input_file}')
         try:
             video_capture = cv2.VideoCapture(self.input_file)
-            total_frame_count = int(video_capture.get(cv2.CAP_PROP_FRAME_COUNT))
         except Exception:
             self.status = 'failure'
             return 1
         else:
+            total_frame_count = int(video_capture.get(cv2.CAP_PROP_FRAME_COUNT))
+            self.total_frame_count = total_frame_count
             if self.batch_mode:
                 # Use CUDA for faster processing
                 # https://github.com/ageitgey/face_recognition/blob/master/examples/find_faces_in_batches.py
@@ -139,7 +140,7 @@ class ParseTask(Task):
                 current_frame_index = -1
                 frame_indices = []
                 number_of_faces_in_frames = []
-                # pbar = tqdm(total=total_frame_count//self.sample_interval)
+                pbar = tqdm(total=total_frame_count//self.sample_interval, desc=f'Worker-{pid}', position=pid, leave=False)
                 while video_capture.isOpened():
                     ret, frame = video_capture.read()
                     if not ret:
@@ -150,22 +151,23 @@ class ParseTask(Task):
                         face_locations = face_recognition.face_locations(frame)
                         num_faces = len(face_locations)
                         number_of_faces_in_frames.append(num_faces)
-                        # pbar.update(1)
-                # pbar.close()
+                        pbar.update(1)
+                pbar.close()
                 self.status = 'success'
                 self.set_done()
                 self.parse_result = (frame_indices, number_of_faces_in_frames)
 
+            video_capture.release()
             # Delete video if needed
             if self.delete_after_done:
                 self._delete_input_file()
             return 0
 
 
-def task_worker(tasks_assigned, tasks_done, tasks_failed, next_tasks_assigned=None):
+def download_task_worker(tasks_assigned, tasks_done, tasks_failed, next_tasks_assigned=None):
     while True:
         try:
-            task = tasks_assigned.get_nowait()
+            task = tasks_assigned.get()
         except queue.Empty:
             break
         else:
@@ -182,9 +184,18 @@ def task_worker(tasks_assigned, tasks_done, tasks_failed, next_tasks_assigned=No
     return True
 
 
-def parse_task_worker(tasks_assigned, tasks_done, tasks_failed):
+def parse_task_worker(tasks_assigned, tasks_done, tasks_failed, pid):
     while True:
-        pass
+        try:
+            task = tasks_assigned.get() # Using get_nowait() will cause problem
+        except queue.Empty:
+            break
+        else:
+            task.execute(pid)
+            if task.done:
+                tasks_done.put(task)
+            else:
+                tasks_failed.put(task)
     return True
 
 
@@ -226,7 +237,7 @@ def test_dl():
     num_dl_workers = 2
     download_processes = []
     for _ in range(num_dl_workers):
-        p = mp.Process(target = task_worker, args=(dl_tasks_assigned, dl_tasks_done, dl_tasks_failed))
+        p = mp.Process(target = download_task_worker, args=(dl_tasks_assigned, dl_tasks_done, dl_tasks_failed))
         download_processes.append(p)
         p.start()
 
@@ -264,7 +275,7 @@ def test_parse(args):
     num_dl_workers = 2
     download_processes = []
     for _ in range(num_dl_workers):
-        p = mp.Process(target = task_worker, args=(dl_tasks_assigned, dl_tasks_done, dl_tasks_failed, parse_tasks_assigned))
+        p = mp.Process(target = download_task_worker, args=(dl_tasks_assigned, dl_tasks_done, dl_tasks_failed, parse_tasks_assigned))
         download_processes.append(p)
         p.start()
     
@@ -273,11 +284,12 @@ def test_parse(args):
         time.sleep(1)
         if not parse_tasks_assigned.empty():
             break
+    # print(f'parse tasks assigned: {parse_tasks_assigned.qsize()}')
 
     num_parse_workers = 2
     parse_processes = []
-    for _ in range(num_parse_workers):
-        p = mp.Process(target=task_worker, args=(parse_tasks_assigned, parse_tasks_done, parse_tasks_failed))
+    for i in range(num_parse_workers):
+        p = mp.Process(target = parse_task_worker, args=(parse_tasks_assigned, parse_tasks_done, parse_tasks_failed, i+1))
         parse_processes.append(p)
         p.start()
 
@@ -290,11 +302,8 @@ def test_parse(args):
 
         num_dl_tasks_remain = num_dl_tasks - num_dl_tasks_done - num_dl_tasks_failed
         num_parse_tasks_remain = (num_dl_tasks - num_dl_tasks_failed) - num_parse_tasks_done - num_parse_tasks_failed
-        sys.stdout.write(f'\r dl tasks remain: {num_dl_tasks_remain}, done: {num_dl_tasks_done}, failed: {num_dl_tasks_failed} | parse tasks remain: {num_parse_tasks_remain}, done: {num_parse_tasks_done}, failed: {num_parse_tasks_failed}, assigned: {parse_tasks_assigned.qsize()}')
+        sys.stdout.write(f'\r dl tasks remain: {num_dl_tasks_remain}, done: {num_dl_tasks_done}, failed: {num_dl_tasks_failed} | parse tasks remain: {num_parse_tasks_remain}, done: {num_parse_tasks_done}, failed: {num_parse_tasks_failed}')
         sys.stdout.flush()
-
-        task = parse_tasks_assigned.get_nowait()
-        task.execute()
 
         if num_parse_tasks_remain == 0:
             print('='*12)
