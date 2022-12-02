@@ -108,7 +108,7 @@ class ParseTask(Task):
             os.remove(self.input_file)
     
     def _save_parse_result(self):
-        pickle.dump(self.parse_result, open(self.output_path, 'w'))
+        pickle.dump(self.parse_result, open(self.output_path, 'wb'))
 
     def execute(self, pid:int=None):
         # print(f'Worker-{pid} started parsing {self.input_file}')
@@ -159,6 +159,7 @@ class ParseTask(Task):
                         break
                     current_frame_index += 1
                     if (current_frame_index + 1) % self.sample_interval == 0:
+                        frame_indices.append(current_frame_index)
                         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                         face_locations = face_recognition.face_locations(frame)
                         num_faces = len(face_locations)
