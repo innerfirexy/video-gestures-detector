@@ -4,7 +4,10 @@ import subprocess
 import json
 import sys
 import os
+import glob
 import time
+import itertools
+import pickle
 import cv2
 import face_recognition
 import numpy as np
@@ -27,7 +30,7 @@ def create_parser():
     parser.add_argument('--batch_size', '-bs', type=int, default=128)
     parser.add_argument('--delete_after_done', action='store_true')
     parser.add_argument('--sample_interval', '-si', type=int, default=24)
-    parser.add_argument('--log_file', type=str)
+    parser.add_argument('--log_file', type=str, default=None)
     return parser
 
 
@@ -69,7 +72,8 @@ class DownloadTask(Task):
 
     def create_next_task(self):
         try:
-            parse_task = ParseTask(input_file=self.downloaded_video_file, sample_interval=self.args.sample_interval, batch_mode=self.args.batch_mode, batch_size=self.args.batch_size, delete_after_done=self.args.delete_after_done, url=self.url)
+            parse_task = ParseTask(input_file=self.downloaded_video_file, sample_interval=self.args.sample_interval, 
+            batch_mode=self.args.batch_mode, batch_size=self.args.batch_size, delete_after_done=self.args.delete_after_done, url=self.url)
         except Exception:
             print('Error in creating task for {}'.format(self.downloaded_video_file))
             raise
@@ -93,10 +97,18 @@ class ParseTask(Task):
         self.delete_after_done = delete_after_done
         self.parse_result = None
         self.url = url
+        self._init_output_path(input_file)
+    
+    def _init_output_path(self, input_file: str):
+        output_filename, _ = os.path.splitext(input_file)
+        self.output_path = output_filename + '.pkl'
     
     def _delete_input_file(self):
         if os.path.exists(self.input_file):
             os.remove(self.input_file)
+    
+    def _save_parse_result(self):
+        pickle.dump(self.parse_result, open(self.output_path, 'w'))
 
     def execute(self, pid:int=None):
         # print(f'Worker-{pid} started parsing {self.input_file}')
@@ -152,10 +164,11 @@ class ParseTask(Task):
                         num_faces = len(face_locations)
                         number_of_faces_in_frames.append(num_faces)
                         pbar.update(1)
-                pbar.close()
                 self.status = 'success'
                 self.set_done()
                 self.parse_result = (frame_indices, number_of_faces_in_frames)
+                self._save_parse_result()
+                pbar.close()
 
             video_capture.release()
             # Delete video if needed
@@ -199,7 +212,7 @@ def parse_task_worker(tasks_assigned, tasks_done, tasks_failed, pid):
     return True
 
 
-def init_download_tasks(play_list_file: str, args) -> List[Task]:
+def _load_tasks_from_playlist_file(play_list_file: str, args) -> List[Task]:
     video_urls = []
     with open(play_list_file, 'r') as f:
         for line in f:
@@ -215,12 +228,21 @@ def init_download_tasks(play_list_file: str, args) -> List[Task]:
         tasks.append(DownloadTask(download_path='./tmp', url=url, args=args))
     return tasks
 
+def load_tasks_from_folder(play_list_folder: str, args) -> List[Task]:
+    loaded_tasks = []
+    play_list_files = glob.glob(os.path.join(play_list_folder, '*.md'))
+    for pl_file in play_list_files:
+        tasks = _load_tasks_from_playlist_file(pl_file, args)
+        loaded_tasks.append(tasks)
+    loaded_tasks = list(itertools.chain.from_iterable(loaded_tasks))
+    return loaded_tasks
+
 
 def main():
     pass
 
 
-def test_dl():
+def test_dl(args):
     # t1 = DownloadTask(download_path='./tmp', url='https://www.youtube.com/watch?v=Z3l3ST7z7ps', task_type='download')
     # ret = t1.execute()
     # print(ret)
@@ -229,7 +251,7 @@ def test_dl():
     dl_tasks_assigned = Queue()
     dl_tasks_done = Queue()
     dl_tasks_failed = Queue()
-    tasks = init_download_tasks(play_list_file)
+    tasks = _load_tasks_from_playlist_file(play_list_file, args)
     for t in tasks:
         dl_tasks_assigned.put(t)
     num_tasks_total = len(tasks)
@@ -259,11 +281,15 @@ def test_dl():
 
 
 def test_parse(args):
-    play_list_file = 'play_lists/Life Academy_Loving on Purpose.md'
+    # play_list_file = 'play_lists/Life Academy_Loving on Purpose.md'
+    # dl_tasks = _load_tasks_from_playlist_file(play_list_file, args=args)
+    play_list_folder = 'play_lists/'
+    dl_tasks = load_tasks_from_folder(play_list_folder, args)
+
     dl_tasks_assigned = Queue()
     dl_tasks_done = Queue()
     dl_tasks_failed = Queue()
-    dl_tasks = init_download_tasks(play_list_file, args=args)
+
     for t in dl_tasks:
         dl_tasks_assigned.put(t)
     num_dl_tasks = len(dl_tasks)
