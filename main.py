@@ -1,4 +1,5 @@
 import multiprocessing as mp
+import numbers
 import queue
 import subprocess
 import json
@@ -73,7 +74,7 @@ class DownloadTask(Task):
     def create_next_task(self):
         try:
             parse_task = ParseTask(input_file=self.downloaded_video_file, sample_interval=self.args.sample_interval, 
-            batch_mode=self.args.batch_mode, batch_size=self.args.batch_size, delete_after_done=self.args.delete_after_done, url=self.url)
+            batch_mode=self.args.batch_mode, batch_size=self.args.batch_size, delete_after_done=self.args.delete_after_done, video_id=self.video_id)
         except Exception:
             print('Error in creating task for {}'.format(self.downloaded_video_file))
             raise
@@ -82,7 +83,7 @@ class DownloadTask(Task):
 
 class ParseTask(Task):
     def __init__(self, input_file: str, sample_interval: int, batch_mode: bool, batch_size: int,
-                 delete_after_done: bool, url: str):
+                 delete_after_done: bool, video_id: str):
         """
         :param input_file: Path of input video file
         :param sample_interval: Interval of sampling the input video, measured by number of frames
@@ -96,7 +97,7 @@ class ParseTask(Task):
         self.batch_size = batch_size
         self.delete_after_done = delete_after_done
         self.parse_result = None
-        self.url = url
+        self.video_id = video_id
         self._init_output_path(input_file)
     
     def _init_output_path(self, input_file: str):
@@ -109,6 +110,11 @@ class ParseTask(Task):
     
     def _save_parse_result(self):
         pickle.dump(self.parse_result, open(self.output_path, 'wb'))
+    
+    def get_log_str(self):
+        numbers_of_faces = self.parse_result[1]
+        one_face_ratio = numbers_of_faces.count(1) / len(numbers_of_faces)
+        return f'{self.video_id},{self.duration},{one_face_ratio}\n'
 
     def execute(self, pid:int=None):
         # print(f'Worker-{pid} started parsing {self.input_file}')
@@ -119,7 +125,9 @@ class ParseTask(Task):
             return 1
         else:
             total_frame_count = int(video_capture.get(cv2.CAP_PROP_FRAME_COUNT))
+            fps = int(video_capture.get(cv2.CAP_PROP_FPS))
             self.total_frame_count = total_frame_count
+            self.duration = total_frame_count / fps
             if self.batch_mode:
                 # Use CUDA for faster processing
                 # https://github.com/ageitgey/face_recognition/blob/master/examples/find_faces_in_batches.py
@@ -211,6 +219,16 @@ def parse_task_worker(tasks_assigned, tasks_done, tasks_failed, pid):
             else:
                 tasks_failed.put(task)
     return True
+
+
+def log_writer(log_file: str, parse_tasks_done: Queue):
+    with open(log_file, 'w') as f:
+        while True:
+            task = parse_tasks_done.get()
+            if task == 'done':
+                break
+            f.write(task.get_log_str())
+            f.flush()
 
 
 def _load_tasks_from_playlist_file(play_list_file: str, args) -> List[Task]:
@@ -319,20 +337,22 @@ def test_parse(args):
         p = mp.Process(target = parse_task_worker, args=(parse_tasks_assigned, parse_tasks_done, parse_tasks_failed, i+1))
         parse_processes.append(p)
         p.start()
+    
+    if args.log_file:
+        p_log = mp.Process(target = log_writer, args=(args.log_file, parse_tasks_done))
+        p_log.start()
 
     while True:
         time.sleep(1)
         num_dl_tasks_done = dl_tasks_done.qsize()
         num_dl_tasks_failed = dl_tasks_failed.qsize()
-        num_parse_tasks_done = parse_tasks_done.qsize()
-        num_parse_tasks_failed = parse_tasks_failed.qsize()
-
         num_dl_tasks_remain = num_dl_tasks - num_dl_tasks_done - num_dl_tasks_failed
-        num_parse_tasks_remain = (num_dl_tasks - num_dl_tasks_failed) - num_parse_tasks_done - num_parse_tasks_failed
-        sys.stdout.write(f'\r dl tasks remain: {num_dl_tasks_remain}, done: {num_dl_tasks_done}, failed: {num_dl_tasks_failed} | parse tasks remain: {num_parse_tasks_remain}, done: {num_parse_tasks_done}, failed: {num_parse_tasks_failed}')
-        sys.stdout.flush()
+        num_parse_tasks_remain = parse_tasks_assigned.qsize()
+        # sys.stdout.write(f'\r dl tasks remain: {num_dl_tasks_remain}, done: {num_dl_tasks_done}, failed: {num_dl_tasks_failed} | parse tasks remain: {num_parse_tasks_remain}')
+        # sys.stdout.flush()
 
         if num_parse_tasks_remain == 0:
+            parse_tasks_done.append('done')
             print('='*12)
             print('All download tasks done')
             break
@@ -341,6 +361,8 @@ def test_parse(args):
         p.join()
     for p in parse_processes:
         p.join()
+    if args.log_file:
+        p_log.join()
 
 
 if __name__ == '__main__':
