@@ -26,7 +26,7 @@ else:
 # Create argument parser
 def create_parser():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--batch_mode', '-bm', action='store_true')
+    parser.add_argument('--batch_mode', '-bm', action='store_true', help='batch mode requires dlib installed with CUDA support. See this post for installation: https://gist.github.com/nguyenhoan1988/ed92d58054b985a1b45a521fcf8fa781')
     parser.add_argument('--batch_size', '-bs', type=int, default=128)
     parser.add_argument('--delete_after_done', action='store_true')
     parser.add_argument('--sample_interval', '-si', type=int, default=24)
