@@ -8,6 +8,7 @@ import time
 import cv2
 import face_recognition
 import numpy as np
+from tqdm import tqdm
 import argparse
 import re
 from typing import List
@@ -31,25 +32,30 @@ def create_parser():
 
 
 class Task:
-    def __init__(self, task_type: str, url: str):
-        self.task_type = task_type
-        self.url = url
+    def __init__(self):
         self.done = False
         self.status = None
-        self.video_id = re.search(r'(?<=\?v\=).+', url).group(0)
     def set_done(self):
         self.done = True
 
 
 class DownloadTask(Task):
     command = 'yt-dlp'
-    def __init__(self, download_path: str, args, **kwargs):
-        super(DownloadTask, self).__init__(**kwargs)
+    def __init__(self, download_path: str, url: str, args):
+        super(DownloadTask, self).__init__()
         self.download_path = download_path
-        self.n_trials = 0
+        self.url = url
         self.args = args
+        self.video_id = re.search(r'(?<=\?v\=).+', url).group(0)
+        self.downloaded_video_file = os.path.join(self.download_path, self.video_id + '.mp4')
+        self.n_trials = 0
 
     def execute(self):
+        if os.path.exists(self.downloaded_video_file):
+            self.set_done()
+            self.status = 'success'
+            return 
+        # Run download command
         ret = subprocess.run([DownloadTask.command, self.url, '--paths', self.download_path, 
         '--output', '%(id)s.%(ext)s', '--format', 'mp4', '--write-auto-subs',
         '--quiet'])
@@ -62,32 +68,40 @@ class DownloadTask(Task):
         return ret
 
     def create_next_task(self):
-        input_video = os.path.join(self.download_path, self.video_id + '.mp4')
-        parse_task = ParseTask(self, input_path=input_video, sample_interval=self.args.sample_interval,
-                               batch_mode=self.args.batch_mode, batch_size=self.args.batch_size,
-                               delete_after_done=self.args.delete_after_done, url=self.url)
+        try:
+            parse_task = ParseTask(input_file=self.downloaded_video_file, sample_interval=self.args.sample_interval, batch_mode=self.args.batch_mode, batch_size=self.args.batch_size, delete_after_done=self.args.delete_after_done, url=self.url)
+        except Exception:
+            print('Error in creating task for {}'.format(self.downloaded_video_file))
+            raise
         return parse_task
 
 
 class ParseTask(Task):
-    def __init__(self, input_path: str, sample_interval: int, batch_mode: bool, batch_size: int,
-                 delete_after_done: bool, **kwargs):
+    def __init__(self, input_file: str, sample_interval: int, batch_mode: bool, batch_size: int,
+                 delete_after_done: bool, url: str):
         """
-        :param input_path: Path of input video file
+        :param input_file: Path of input video file
         :param sample_interval: Interval of sampling the input video, measured by number of frames
         :param delete_after_done: If True, delete the input video after the parsing is successfully done
         :param kwargs:
         """
-        super(ParseTask, self).__init__(**kwargs)
-        self.input_file = input_path
+        super(ParseTask, self).__init__()
+        self.input_file = input_file
         self.sample_interval = sample_interval
         self.batch_mode = batch_mode
         self.batch_size = batch_size
         self.delete_after_done = delete_after_done
         self.parse_result = None
+        self.url = url
+    
+    def _delete_input_file(self):
+        if os.path.exists(self.input_file):
+            os.remove(self.input_file)
+
     def execute(self):
+        # print(f'parsing {self.input_file}')
         try:
-            video_capture = cv2.VideoCapture(self.input_path)
+            video_capture = cv2.VideoCapture(self.input_file)
             total_frame_count = int(video_capture.get(cv2.CAP_PROP_FRAME_COUNT))
         except Exception:
             self.status = 'failure'
@@ -121,16 +135,34 @@ class ParseTask(Task):
                 self.parse_result = (frame_indices, number_of_faces_in_frames)
             else:
                 # Process frames one by one
-                # https://github.com/ageitgey/face_recognition/blob/master/examples/find_faces_in_picture.py
-                pass
+                # https://github.com/ageitgey/face_recognition/blob/master/examples/facerec_from_video_file.py
+                current_frame_index = -1
+                frame_indices = []
+                number_of_faces_in_frames = []
+                # pbar = tqdm(total=total_frame_count//self.sample_interval)
+                while video_capture.isOpened():
+                    ret, frame = video_capture.read()
+                    if not ret:
+                        break
+                    current_frame_index += 1
+                    if (current_frame_index + 1) % self.sample_interval == 0:
+                        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        face_locations = face_recognition.face_locations(frame)
+                        num_faces = len(face_locations)
+                        number_of_faces_in_frames.append(num_faces)
+                        # pbar.update(1)
+                # pbar.close()
+                self.status = 'success'
+                self.set_done()
+                self.parse_result = (frame_indices, number_of_faces_in_frames)
 
+            # Delete video if needed
             if self.delete_after_done:
-                pass
-
+                self._delete_input_file()
             return 0
 
 
-def task_worker(tasks_assigned, tasks_done, tasks_fail, next_tasks_assigned=None):
+def task_worker(tasks_assigned, tasks_done, tasks_failed, next_tasks_assigned=None):
     while True:
         try:
             task = tasks_assigned.get_nowait()
@@ -146,11 +178,17 @@ def task_worker(tasks_assigned, tasks_done, tasks_fail, next_tasks_assigned=None
                     next_task = task.create_next_task()
                     next_tasks_assigned.put(next_task)
             else:
-                tasks_fail.put(task)
+                tasks_failed.put(task)
     return True
 
 
-def init_download_tasks(play_list_file: str) -> List[Task]:
+def parse_task_worker(tasks_assigned, tasks_done, tasks_failed):
+    while True:
+        pass
+    return True
+
+
+def init_download_tasks(play_list_file: str, args) -> List[Task]:
     video_urls = []
     with open(play_list_file, 'r') as f:
         for line in f:
@@ -161,25 +199,14 @@ def init_download_tasks(play_list_file: str) -> List[Task]:
                 json_obj = json.loads(line)
                 if json_obj['duration'] is not None: # duration is null for private videos
                     video_urls.append(json_obj['url'])
-                    
     tasks = []
     for url in video_urls:
-        tasks.append(DownloadTask(download_path='./tmp', url=url, task_type='download'))
-    
+        tasks.append(DownloadTask(download_path='./tmp', url=url, args=args))
     return tasks
 
 
 def main():
-    dl_tasks_assigned = Queue()
-    dl_tasks_done = Queue()
-    dl_tasks_fail = Queue()
-
-    parse_tasks_assigned = Queue()
-    parse_tasks_done = Queue()
-
-    download_tasks = init_download_tasks()
-    for t in download_tasks:
-        dl_tasks_assigned.put(t)
+    pass
 
 
 def test_dl():
@@ -220,32 +247,67 @@ def test_dl():
         p.join()
 
 
-def test_parse():
+def test_parse(args):
     play_list_file = 'play_lists/Life Academy_Loving on Purpose.md'
     dl_tasks_assigned = Queue()
     dl_tasks_done = Queue()
     dl_tasks_failed = Queue()
-    tasks = init_download_tasks(play_list_file)
-    for t in tasks:
+    dl_tasks = init_download_tasks(play_list_file, args=args)
+    for t in dl_tasks:
         dl_tasks_assigned.put(t)
-    num_dl_tasks = len(tasks)
+    num_dl_tasks = len(dl_tasks)
+
+    parse_tasks_assigned = Queue()
+    parse_tasks_done = Queue()
+    parse_tasks_failed = Queue()
 
     num_dl_workers = 2
     download_processes = []
     for _ in range(num_dl_workers):
-        p = mp.Process(target = task_worker, args=(dl_tasks_assigned, dl_tasks_done, dl_tasks_failed))
+        p = mp.Process(target = task_worker, args=(dl_tasks_assigned, dl_tasks_done, dl_tasks_failed, parse_tasks_assigned))
         download_processes.append(p)
         p.start()
+    
+    # Let the download task workers run for a while
+    while True:
+        time.sleep(1)
+        if not parse_tasks_assigned.empty():
+            break
 
     num_parse_workers = 2
     parse_processes = []
     for _ in range(num_parse_workers):
-        pass
+        p = mp.Process(target=task_worker, args=(parse_tasks_assigned, parse_tasks_done, parse_tasks_failed))
+        parse_processes.append(p)
+        p.start()
 
     while True:
-        # dispatch download
-        pass
+        time.sleep(1)
+        num_dl_tasks_done = dl_tasks_done.qsize()
+        num_dl_tasks_failed = dl_tasks_failed.qsize()
+        num_parse_tasks_done = parse_tasks_done.qsize()
+        num_parse_tasks_failed = parse_tasks_failed.qsize()
+
+        num_dl_tasks_remain = num_dl_tasks - num_dl_tasks_done - num_dl_tasks_failed
+        num_parse_tasks_remain = (num_dl_tasks - num_dl_tasks_failed) - num_parse_tasks_done - num_parse_tasks_failed
+        sys.stdout.write(f'\r dl tasks remain: {num_dl_tasks_remain}, done: {num_dl_tasks_done}, failed: {num_dl_tasks_failed} | parse tasks remain: {num_parse_tasks_remain}, done: {num_parse_tasks_done}, failed: {num_parse_tasks_failed}, assigned: {parse_tasks_assigned.qsize()}')
+        sys.stdout.flush()
+
+        task = parse_tasks_assigned.get_nowait()
+        task.execute()
+
+        if num_parse_tasks_remain == 0:
+            print('='*12)
+            print('All download tasks done')
+            break
+    
+    for p in download_processes:
+        p.join()
+    for p in parse_processes:
+        p.join()
 
 
 if __name__ == '__main__':
-    test_dl()
+    parser = create_parser()
+    args = parser.parse_args()
+    test_parse(args)
