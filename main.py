@@ -114,7 +114,8 @@ class ParseTask(Task):
     def get_log_str(self):
         numbers_of_faces = self.parse_result[1]
         one_face_ratio = numbers_of_faces.count(1) / len(numbers_of_faces)
-        return f'{self.video_id},{self.duration},{one_face_ratio}\n'
+        zero_face_ratio = numbers_of_faces.count(0) / len(numbers_of_faces)
+        return f'{self.video_id},{self.duration},{zero_face_ratio},{one_face_ratio}\n'
 
     def execute(self, pid:int=None):
         # print(f'Worker-{pid} started parsing {self.input_file}')
@@ -348,8 +349,8 @@ def test_parse(args):
         num_dl_tasks_failed = dl_tasks_failed.qsize()
         num_dl_tasks_remain = num_dl_tasks - num_dl_tasks_done - num_dl_tasks_failed
         num_parse_tasks_remain = parse_tasks_assigned.qsize()
-        # sys.stdout.write(f'\r dl tasks remain: {num_dl_tasks_remain}, done: {num_dl_tasks_done}, failed: {num_dl_tasks_failed} | parse tasks remain: {num_parse_tasks_remain}')
-        # sys.stdout.flush()
+        sys.stdout.write(f'\r dl tasks remain: {num_dl_tasks_remain}, done: {num_dl_tasks_done}, failed: {num_dl_tasks_failed} | parse tasks remain: {num_parse_tasks_remain}')
+        sys.stdout.flush()
 
         if num_parse_tasks_remain == 0:
             parse_tasks_done.append('done')
