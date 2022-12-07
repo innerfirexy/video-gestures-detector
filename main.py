@@ -347,14 +347,17 @@ def test_parse(args):
         num_dl_tasks_done = dl_tasks_done.qsize()
         num_dl_tasks_failed = dl_tasks_failed.qsize()
         num_dl_tasks_remain = num_dl_tasks - num_dl_tasks_done - num_dl_tasks_failed
-        num_parse_tasks_remain = parse_tasks_assigned.qsize()
+        num_parse_tasks_total = num_dl_tasks - num_dl_tasks_failed
+        num_parse_tasks_done = parse_tasks_done.qsize()
+        num_parse_tasks_failed = parse_tasks_failed.qsize()
+        num_parse_tasks_remain = num_parse_tasks_total - num_parse_tasks_done - num_parse_tasks_failed
         sys.stdout.write(f'\r dl tasks remain: {num_dl_tasks_remain}, done: {num_dl_tasks_done}, failed: {num_dl_tasks_failed} | parse tasks remain: {num_parse_tasks_remain}')
         sys.stdout.flush()
 
         if num_parse_tasks_remain == 0:
             parse_tasks_done.put('done')
-            print('='*12)
-            print('All download tasks done')
+            print('\n' + '='*12)
+            print('All tasks done')
             break
     
     for p in download_processes:
