@@ -160,7 +160,7 @@ class ParseTask(Task):
                 current_frame_index = -1
                 frame_indices = []
                 number_of_faces_in_frames = []
-                pbar = tqdm(total=total_frame_count//self.sample_interval, desc=f'Worker-{pid}', position=pid, leave=False)
+                # pbar = tqdm(total=total_frame_count//self.sample_interval, desc=f'Worker-{pid}', position=pid, leave=False)
                 while video_capture.isOpened():
                     ret, frame = video_capture.read()
                     if not ret:
@@ -172,12 +172,12 @@ class ParseTask(Task):
                         face_locations = face_recognition.face_locations(frame)
                         num_faces = len(face_locations)
                         number_of_faces_in_frames.append(num_faces)
-                        pbar.update(1)
+                        # pbar.update(1)
                 self.status = 'success'
                 self.set_done()
                 self.parse_result = (frame_indices, number_of_faces_in_frames)
                 self._save_parse_result()
-                pbar.close()
+                # pbar.close()
 
             video_capture.release()
             # Delete video if needed
