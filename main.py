@@ -305,17 +305,17 @@ def test_parse(args):
     play_list_folder = 'play_lists/'
     dl_tasks = load_tasks_from_folder(play_list_folder, args)
 
-    dl_tasks_assigned = Queue()
-    dl_tasks_done = Queue()
-    dl_tasks_failed = Queue()
+    dl_tasks_assigned = Queue(ctx=mp.get_context())
+    dl_tasks_done = Queue(ctx=mp.get_context())
+    dl_tasks_failed = Queue(ctx=mp.get_context())
 
     for t in dl_tasks:
         dl_tasks_assigned.put(t)
     num_dl_tasks = len(dl_tasks)
 
-    parse_tasks_assigned = Queue()
-    parse_tasks_done = Queue()
-    parse_tasks_failed = Queue()
+    parse_tasks_assigned = Queue(ctx=mp.get_context())
+    parse_tasks_done = Queue(ctx=mp.get_context())
+    parse_tasks_failed = Queue(ctx=mp.get_context())
 
     num_dl_workers = 2
     download_processes = []
@@ -352,7 +352,7 @@ def test_parse(args):
         sys.stdout.flush()
 
         if num_parse_tasks_remain == 0:
-            parse_tasks_done.append('done')
+            parse_tasks_done.put('done')
             print('='*12)
             print('All download tasks done')
             break
